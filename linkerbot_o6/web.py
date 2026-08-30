@@ -495,6 +495,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Upgrade", "websocket")
         self.send_header("Connection", "Upgrade")
         self.send_header("Sec-WebSocket-Accept", accept)
+        # allow browsers to reach the local bridge from public HTTPS pages
+        # (Chrome Private Network Access + CORS)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
+        self.send_header("Access-Control-Allow-Headers", "*")
         self.end_headers()
         conn = self.connection
         try:
