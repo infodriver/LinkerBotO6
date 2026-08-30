@@ -67,6 +67,19 @@ python3 -m linkerbot_o6.web --port 8080
 - **Camera hand control**: Start camera → show exactly ONE hand → enable.
   Fingers follow yours; two hands or no hand = no motion.
 
+## WebSocket CAN bridge (for external clients/demos)
+
+The same server also speaks a minimal WebSocket CAN bridge on the same port
+(`ws://127.0.0.1:8080`), used e.g. by the robocx.io LinkerBot O6 demo's
+"Connect hand" button:
+
+- On connect the server sends `{"type":"ready"}`
+- Client sends `{"type":"frame","id":<can id>,"data":[cmd, ...]}` — the
+  bridge TXes it to the CAN bus and relays the hand's responses back as
+  `{"type":"frame","id":<can id>,"data":[...]}`
+- `{"type":"heartbeat"}` is ignored; `{"type":"close"}` closes
+- `id` = 40 (0x28, left) or 39 (0x27, right)
+
 ## Python API
 
 ```python

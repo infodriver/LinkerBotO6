@@ -15,7 +15,10 @@ Endpoints:
   POST /release   -> {}
 """
 import argparse
+import base64
+import hashlib
 import json
+import struct
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -460,6 +463,10 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        # WebSocket bridge for the robocx.io demo / external clients
+        if self.headers.get("Upgrade", "").lower() == "websocket":
+            self._handle_websocket()
+            return
         if self.path == "/status":
             self._json(hand_status())
         elif self.path == "/" or self.path == "/index.html":
@@ -471,6 +478,120 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         else:
             self._json({"error": "not found"}, 404)
+
+    # ---- WebSocket CAN bridge (RFC 6455, minimal) ----
+    # Protocol: on connect send {"type":"ready"}; receive
+    # {"type":"frame","id":<can id>,"data":[cmd,...]}; relay hand
+    # responses as {"type":"frame","id":...,"data":[...]}. Ignore
+    # {"type":"heartbeat"}.
+    _WS_MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+    def _handle_websocket(self):
+        key = self.headers.get("Sec-WebSocket-Key", "")
+        accept = base64.b64encode(
+            hashlib.sha1((key + self._WS_MAGIC).encode()).digest()
+        ).decode()
+        self.send_response(101, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", accept)
+        self.end_headers()
+        conn = self.connection
+        try:
+            self._ws_send(conn, {"type": "ready"})
+            while True:
+                opcode, payload = self._ws_recv(conn)
+                if opcode == 8:  # close
+                    break
+                if opcode == 9:  # ping -> pong
+                    self._ws_send_raw(conn, 0xA, payload)
+                    continue
+                if opcode != 1:  # text only
+                    continue
+                try:
+                    msg = json.loads(payload.decode("utf-8", "replace"))
+                except Exception:
+                    continue
+                t = msg.get("type")
+                if t == "frame":
+                    self._bridge_frame(conn, msg.get("id"), msg.get("data"))
+                elif t == "close":
+                    break
+                # heartbeat: nothing to do
+        except Exception:
+            pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def _bridge_frame(self, conn, cid, data):
+        """TX a frame to the CAN bus and relay responses from that id."""
+        if not isinstance(cid, int) or not isinstance(data, list):
+            return
+        payload = bytes(min(len(data), 8))
+        try:
+            with lock:
+                hand.adapter._bulk_in(0x82, timeout=30)  # drain stale
+                hand.adapter.send_frame(cid, payload)
+                end = time.time() + 0.4
+                while time.time() < end:
+                    r, buf = hand.adapter._bulk_in(
+                        0x82, timeout=int((end - time.time()) * 1000) + 10)
+                    if not buf:
+                        continue
+                    for rec in hand.adapter.decode(buf):
+                        if rec[0] == "frame" and rec[1] == cid:
+                            self._ws_send(conn, {
+                                "type": "frame",
+                                "id": cid,
+                                "data": list(rec[2]),
+                            })
+        except Exception as e:
+            try:
+                self._ws_send(conn, {"type": "error", "message": str(e)})
+            except Exception:
+                pass
+
+    @staticmethod
+    def _ws_recv(conn):
+        hdr = conn.recv(2)
+        if len(hdr) < 2:
+            raise EOFError
+        opcode = hdr[0] & 0x0F
+        masked = hdr[1] & 0x80
+        length = hdr[1] & 0x7F
+        if length == 126:
+            length = struct.unpack(">H", conn.recv(2))[0]
+        elif length == 127:
+            length = struct.unpack(">Q", conn.recv(8))[0]
+        mask = conn.recv(4) if masked else b""
+        payload = b""
+        while len(payload) < length:
+            chunk = conn.recv(length - len(payload))
+            if not chunk:
+                raise EOFError
+            payload += chunk
+        if masked:
+            payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+        return opcode, payload
+
+    @staticmethod
+    def _ws_send_raw(conn, opcode, payload):
+        header = bytes([0x80 | opcode])
+        n = len(payload)
+        if n < 126:
+            header += bytes([n])
+        elif n < 65536:
+            header += bytes([126]) + struct.pack(">H", n)
+        else:
+            header += bytes([127]) + struct.pack(">Q", n)
+        conn.sendall(header + payload)
+
+    @staticmethod
+    def _ws_send(conn, obj):
+        Handler._ws_send_raw(conn, 0x1, json.dumps(obj).encode())
 
     def do_POST(self):
         try:
