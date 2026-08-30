@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "linkerbot-o6-sdk"
+version = "0.1.0"
+description = "Zero-dependency SDK for the LinkerBot / LinkerHand O6 dexterous hand over CAN (userspace PCAN-USB driver)."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+linkerbot-o6 = "linkerbot_o6.cli:main"
+linkerbot-o6-web = "linkerbot_o6.web:main"
+
+[tool.setuptools]
+packages = ["linkerbot_o6"]
