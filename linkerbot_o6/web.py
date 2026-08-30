@@ -462,6 +462,17 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_OPTIONS(self):
+        # CORS / Private Network Access preflight (Chrome sends this before
+        # allowing https pages to reach the local ws://127.0.0.1 bridge)
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.send_header("Access-Control-Max-Age", "86400")
+        self.end_headers()
+
     def do_GET(self):
         # WebSocket bridge for the robocx.io demo / external clients
         if self.headers.get("Upgrade", "").lower() == "websocket":
